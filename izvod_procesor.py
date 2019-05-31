@@ -59,6 +59,7 @@ class TableParser(HTMLParser):
         self.found_start = False
         self.collected = ""
         self.result = []
+        self.headers = []
 
     def handle_starttag(self, tag, attrs):
         if tag == 'td':
@@ -69,12 +70,24 @@ class TableParser(HTMLParser):
     def handle_endtag(self, tag):
         if tag == 'tr':
             self.in_tr = False
+
             if self.found_start:
                 try:
                     if int(self.collected.split(' ')[0]) > 0:
-                        self.result.append(self.collected)
+                        data_to_append = self.collected[:-1].split("|")
+                        record_dict = {}
+
+                        for i in range(0, len(data_to_append)):
+                            record = data_to_append[i]
+                            header_name = self.headers[i]
+                            record_dict[header_name] = record
+
+                        self.result.append(record_dict)
                 except:
                     pass
+            else:
+                self.result.append(self.collected)
+
             self.collected = ""
 
         if tag == 'td':
@@ -84,37 +97,36 @@ class TableParser(HTMLParser):
 
     def handle_data(self, data):
         if 'Staro stanje' in data:
+            # last result data contains column names
+            self.headers = self.result[-1][:-1].split("|")
+
             self.found_start = True
+            self.result.clear()
 
         if self.in_td and self.in_tr:
-            self.collected += data.strip()
+            self.collected += data.strip() + " "
 
 
-def parse_data(line):
+def parse_data(header_labels, data):
     global client_dict
     global errors
 
-    try:
-        while "  " in line:
-            line = line.replace("  ", " ")
+    client_name_label = None
+    for label in header_labels:
+        if "Primalac" in label:
+            client_name_label = label
+            break
 
-        data_parts = line.split('|')
-        client_name = data_parts[2]
-
-        # client_data = [data_parts[0], data_parts[1], data_parts[4], data_parts[5]]
-        client_data = data_parts
-
+    if client_name_label is None:
+        errors.append(data)
+    else:
+        # We now know how to recognize client name
+        for record in data:
+            client_name = record[client_name_label]
         try:
-            data_list = client_dict[client_name]
-            client_dict[client_name].append(client_data)
+            client_dict[client_name].append(record)
         except:
-            data_list = []
-
-        data_list.append(client_data)
-        client_dict[client_name] = data_list
-
-    except:
-        errors.append(line)
+            client_dict[client_name] = record
 
 
 def out_data():
@@ -133,7 +145,9 @@ for file in list_files(current_path):
     file_parser = TableParser()
     file_parser.feed(fc)
 
-    for text in file_parser.result:
-        parse_data(text)
+    headers = file_parser.headers
 
-out_data()
+    for text in file_parser.result:
+        parse_data(headers, text)
+
+# out_data()
