@@ -2,12 +2,19 @@
 
 
 import os
-from html.parser import HTMLParser
-
+#from html.parser import HTMLParser
+from HTMLParser import HTMLParser
+from collections import OrderedDict
+import datetime
 
 current_path = os.path.dirname(os.path.realpath(__file__))
 client_dict = {}
-errors = []
+table_header_labels = []
+out_file_name = "sortirano.csv"
+out_file_path = os.path.join(current_path, out_file_name)
+err_file_name = "greske_prilikom_ocitavanja. txt"
+err_file_path = os.path.join(current_path, err_file_name)
+date_label = None
 
 
 def list_files(root_dir):
@@ -43,31 +50,47 @@ def read_file(file_path):
         except:
             encode = 'utf-8windows-1250'
 
-    f = open(file_path, 'r', encoding=encode)
+    # f = open(file_path, 'r', encoding=encode)
+    f = open(file_path, 'r')
     content = f.read()
     f.close()
 
     return content
 
 
-class TableParser(HTMLParser):
+def append_to_header_labels(data, at_beginning=False):
+    global table_header_labels
 
+    if len(data) > 1 and data not in table_header_labels:
+
+        if at_beginning:
+            table_header_labels = [data] + table_header_labels
+        else:
+            table_header_labels.append(data)
+
+
+class TableParser(HTMLParser):
     def __init__(self):
         HTMLParser.__init__(self)
         self.in_td = False
         self.in_tr = False
         self.found_start = False
         self.collected = ""
-        self.result = []
         self.headers = []
+        self.name_idx = None
+        self.last_collected = ""
 
     def handle_starttag(self, tag, attrs):
         if tag == 'td':
             self.in_td = True
         if tag == 'tr':
             self.in_tr = True
+            self.last_collected = self.collected
+            self.collected = ""
 
     def handle_endtag(self, tag):
+        global client_dict
+
         if tag == 'tr':
             self.in_tr = False
 
@@ -76,68 +99,131 @@ class TableParser(HTMLParser):
                     if int(self.collected.split(' ')[0]) > 0:
                         data_to_append = self.collected[:-1].split("|")
                         record_dict = {}
+                        if self.name_idx is not None:
+                            client_name = data_to_append[self.name_idx]
+                        else:
+                            client_name = "Errors"
 
                         for i in range(0, len(data_to_append)):
                             record = data_to_append[i]
                             header_name = self.headers[i]
                             record_dict[header_name] = record
 
-                        self.result.append(record_dict)
+                        if client_name in client_dict:
+                            client_dict[client_name].append(record_dict)
+                        else:
+                            client_dict[client_name] = [record_dict]
                 except:
                     pass
-            else:
-                self.result.append(self.collected)
-
-            self.collected = ""
 
         if tag == 'td':
             self.in_td = False
             if self.in_tr:
-                self.collected += '|'
+                self.collected = self.collected.strip() + '|'
 
     def handle_data(self, data):
+        global date_label
+
         if 'Staro stanje' in data:
             # last result data contains column names
-            self.headers = self.result[-1][:-1].split("|")
+            self.headers = self.last_collected[:-1].split("|")
+
+            # Find the name label
+            for i in range(0, len(self.headers)):
+                label = self.headers[i].strip()
+                if "primalac" in label.lower():
+                    self.name_idx = i
+                    append_to_header_labels(label, at_beginning=True)
+                else:
+                    if "datum" in label.lower():
+                        date_label = label
+
+                    append_to_header_labels(label, at_beginning=False)
 
             self.found_start = True
-            self.result.clear()
 
         if self.in_td and self.in_tr:
             self.collected += data.strip() + " "
 
 
-def parse_data(header_labels, data):
-    global client_dict
-    global errors
+def cleanup_string(text):
+    while "  " in text:
+        text = text.replace("  ", " ")
 
-    client_name_label = None
-    for label in header_labels:
-        if "Primalac" in label:
-            client_name_label = label
-            break
+    return text
 
-    if client_name_label is None:
-        errors.append(data)
-    else:
-        # We now know how to recognize client name
-        for record in data:
-            client_name = record[client_name_label]
+
+def sort_by_date(record_list):
+    global date_label
+
+    record_dict = {}
+    date_list = []
+
+    for item in record_list:
+        date_time_str = item[date_label].split(" ")[0]
+        date_time_obj = datetime.datetime.strptime(date_time_str, '%d.%m.%Y.')
+        key = date_time_obj.date()
+
         try:
-            client_dict[client_name].append(record)
+            record_dict[key].append(item)
         except:
-            client_dict[client_name] = record
+            record_dict[key] = [item]
+
+    sorted_dict = OrderedDict(sorted(record_dict.items()))
+
+    ret_list = []
+
+    for item in sorted_dict:
+        for record in sorted_dict[item]:
+            ret_list.append(record)
+
+    return ret_list
 
 
 def out_data():
     global client_dict
-    global errors
+    global table_header_labels
+    global out_file_path
+    global err_file_path
 
-    for name in client_dict:
-        data_list = client_dict[name]
-        print(name)
-        for record in data_list:
-            print("\t", record)
+    lines = []
+    row = ""
+    errors = []
+
+    for label in table_header_labels:
+        row += '"' + label + '",'
+
+    lines.append(row[:-1] + '\n')
+
+    sorted_client_dict = OrderedDict(sorted(client_dict.items()))
+
+    for name in sorted_client_dict:
+        data = client_dict[name]
+
+        client_name = '"' + cleanup_string(name) + '",'
+
+        record_list = sort_by_date(data)
+
+        for r in range(0, len(record_list)):
+            record = record_list[r]
+            row = client_name
+            for i in range(1, len(table_header_labels)):
+                try:
+                    row += '"' + record[table_header_labels[i]].strip() + '",'
+                except Exception as e:
+                    err_row = '{}' + '\n Original: ' + record + '\n'
+                    errors.append(err_row.format(e))
+
+            lines.append(row[:-1] + '\n')
+
+    f = open(out_file_path, 'w')
+    f.writelines(lines)
+    f.close()
+
+    if len(errors) > 0:
+        f = open(err_file_path, 'w')
+        f.writelines(errors)
+        f.close()
 
 
 for file in list_files(current_path):
@@ -145,9 +231,4 @@ for file in list_files(current_path):
     file_parser = TableParser()
     file_parser.feed(fc)
 
-    headers = file_parser.headers
-
-    for text in file_parser.result:
-        parse_data(headers, text)
-
-# out_data()
+out_data()
