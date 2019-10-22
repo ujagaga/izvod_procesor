@@ -2,12 +2,18 @@
 
 
 import os
+import sys
 #from html.parser import HTMLParser
 from HTMLParser import HTMLParser
 from collections import OrderedDict
 import datetime
 
-current_path = os.path.dirname(os.path.realpath(__file__))
+# determine if application is a script file or frozen exe
+if getattr(sys, 'frozen', False):
+    current_path = os.path.dirname(sys.executable)
+elif __file__:
+    current_path = os.path.dirname(os.path.realpath(__file__))
+
 client_dict = {}
 table_header_labels = []
 out_file_name = "sortirano.csv"
